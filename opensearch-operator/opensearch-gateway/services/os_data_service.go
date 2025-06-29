@@ -74,6 +74,25 @@ func HasIndexPrimariesOnNode(service *OsClusterClient, nodeName string, indices 
 	return false, err
 }
 
+func IsNodeInExclusionList(service *OsClusterClient, nodeName string) (bool, error) {
+	response, err := service.GetClusterSettings()
+	if err != nil {
+		return false, err
+	}
+
+	val, ok := helpers.FindByPath(response.Transient, ClusterSettingsExcludeBrokenPath)
+	if ok && val != "" {
+		valArr := strings.Split(val.(string), ",")
+		for _, name := range valArr {
+			if strings.TrimSpace(name) == nodeName {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
 func AppendExcludeNodeHost(service *OsClusterClient, nodeNameToExclude string) (bool, error) {
 	response, err := service.GetClusterSettings()
 	if err != nil {

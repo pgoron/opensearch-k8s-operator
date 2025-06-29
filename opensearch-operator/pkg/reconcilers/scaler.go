@@ -54,10 +54,12 @@ func (r *ScalerReconciler) Reconcile() (ctrl.Result, error) {
 	for _, nodePool := range r.instance.Spec.NodePools {
 		requeue, err = r.reconcileNodePool(&nodePool)
 		if err != nil {
-			results.Combine(&ctrl.Result{Requeue: requeue, RequeueAfter: 1 * time.Second}, err)
+			results.Combine(&ctrl.Result{RequeueAfter: 10 * time.Second}, err)
 		}
 	}
-	results.Combine(&ctrl.Result{Requeue: requeue, RequeueAfter: 1 * time.Second}, nil)
+	if requeue {
+		results.Combine(&ctrl.Result{RequeueAfter: 10 * time.Second}, nil)
+	}
 
 	// Clean up old node pools
 	r.cleanupStatefulSets(results)
@@ -75,6 +77,12 @@ func (r *ScalerReconciler) reconcileNodePool(nodePool *opsterv1.NodePool) (bool,
 		return false, err
 	}
 
+	if currentSts.Status.ReadyReplicas != *currentSts.Spec.Replicas {
+		// pods are coming up or getting deleted, wait node pool to be stable
+		lg.Info(fmt.Sprintf("Group-%s . waiting on-going scaling operations (readyPods %d/%d) to complete", nodePool.Component, currentSts.Status.ReadyReplicas, *currentSts.Spec.Replicas))
+		return true, nil
+	}
+
 	componentStatus := opsterv1.ComponentStatus{
 		Component:   "Scaler",
 		Status:      "Running",
@@ -84,11 +92,6 @@ func (r *ScalerReconciler) reconcileNodePool(nodePool *opsterv1.NodePool) (bool,
 	currentStatus, found := helpers.FindFirstPartial(comp, componentStatus, helpers.GetByDescriptionAndGroup)
 
 	if currentStatus.Status == "Waiting" {
-		if currentSts.Status.ReadyReplicas != *currentSts.Spec.Replicas {
-			// pods are coming up or getting deleted, continue to wait
-			lg.Info(fmt.Sprintf("Group-%s . waiting to have correct number of readyPods %d/%d to continue scaling", nodePool.Component, currentSts.Status.ReadyReplicas, *currentSts.Spec.Replicas))
-			return true, nil
-		}
 
 		if r.instance.Spec.ConfMgmt.SmartScaler {
 			// stable point reached during down scale, remove previous node from exclusion
@@ -209,6 +212,58 @@ func (r *ScalerReconciler) decreaseOneNode(currentStatus opsterv1.ComponentStatu
 	*currentSts.Spec.Replicas--
 	annotations := map[string]string{"cluster-name": r.instance.GetName()}
 	lastReplicaNodeName := helpers.ReplicaHostName(currentSts, *currentSts.Spec.Replicas)
+
+	// NB: Intent of this if block is to mitigate a race condition between update of statefulset and
+	// update of opensearchcluster status that can mess-up scaler state machine and not properly exclude
+	// some nodes during a multi-node scale down operation.
+	//
+	// few facts:
+	// * update of statefulset will re-enqueue a reconciliation request without delay (because operator is
+	//   configured to watch all objects it creates)
+	// * update of opensearchcluster status will trigger an immediate reconciliation request (because operator
+	//   is configured to listen any change of opensearchcluster object and not only change affecting .spec)
+	// * scaler code currently relies on having consistent view of statefulset and opensearchcluster to support
+	//   multi-node scale down but there is no transaction to guarantee that.
+	//
+	// A nasty side effect is that after call to this method, next reconciliation loop can load an outdated
+	// opensearchcluster object (due to lack of delay, local informer cache may not have yet received update).
+	// Scaler status will still be seen as Drained whereas sts scale down operation has already been triggered.
+	// In a multi-node scale down operation, it causes scaler to continue scale down on next node without having properly
+	// excluding it from routing allocation.
+	//
+	// mitigation: we check that node we want to exclude has been properly be excluded from cluster first.
+	//
+	// Proper way to fix this issue:
+	// * enfore a minimum reconcilation delay between two reconciliation loop to let informer cache to be updated
+	//   (ie requeue with delay if last reconciliation is too recent)
+	// * only watch for .spec change for monitored objects would reduce amount of reconciliation without delay.
+	//   Update of status would cease to retrigger a useless reconciliation
+	// * stop watching events on sts (impact to evaluated, might break over parts of the operator)
+	// * by-pass cache to read opensearchcluster object (usually not recommanded, can induce high load on kube-api server)
+	if smartDecrease {
+		username, password, err := helpers.UsernameAndPassword(r.ctx, r.Client, r.instance)
+		if err != nil {
+			return false, err
+		}
+
+		clusterClient, err := services.NewOsClusterClient(builders.URLForCluster(r.instance), username, password)
+		if err != nil {
+			lg.Error(err, "failed to create os client")
+			return false, err
+		}
+
+		found, err := services.IsNodeInExclusionList(clusterClient, lastReplicaNodeName)
+		if err != nil {
+			lg.Error(err, "failed to retrieve exclusion list")
+			return false, err
+		}
+
+		if !found {
+			lg.Info(fmt.Sprintf("Group-%s . inconsistent scaler state, waiting next reconcile loop", nodePoolGroupName))
+			return true, nil
+		}
+	}
+
 	r.recorder.AnnotatedEventf(r.instance, annotations, "Normal", "Scaler", "Start to decreaseing node %s on %s ", lastReplicaNodeName, nodePoolGroupName)
 	_, err := r.ReconcileResource(&currentSts, reconciler.StatePresent)
 	if err != nil {
