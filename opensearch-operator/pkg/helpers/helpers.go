@@ -40,6 +40,36 @@ func ContainsString(slice []string, s string) bool {
 
 }
 
+func SecurityChangeVersion(cluster *opsterv1.OpenSearchCluster) bool {
+	if cluster == nil {
+		return false
+	}
+	osVersion, err := version.NewVersion(cluster.Spec.General.Version)
+	if err != nil {
+		return true
+	}
+	securityChangeVersion, _ := version.NewVersion("2.0.0")
+	return osVersion.GreaterThanOrEqual(securityChangeVersion)
+}
+
+// TlsCASecretRef returns the CA secret reference for admin and security operations.
+// OpenSearch 2.x uses the HTTP CA; earlier versions use the transport CA.
+func TlsCASecretRef(cluster *opsterv1.OpenSearchCluster) corev1.LocalObjectReference {
+	if cluster == nil || cluster.Spec.Security == nil || cluster.Spec.Security.Tls == nil {
+		return corev1.LocalObjectReference{}
+	}
+	if SecurityChangeVersion(cluster) {
+		if cluster.Spec.Security.Tls.Http != nil {
+			return cluster.Spec.Security.Tls.Http.CaSecret
+		}
+		return corev1.LocalObjectReference{}
+	}
+	if cluster.Spec.Security.Tls.Transport != nil {
+		return cluster.Spec.Security.Tls.Transport.CaSecret
+	}
+	return corev1.LocalObjectReference{}
+}
+
 func GetField(v *appsv1.StatefulSetSpec, field string) interface{} {
 
 	r := reflect.ValueOf(v)

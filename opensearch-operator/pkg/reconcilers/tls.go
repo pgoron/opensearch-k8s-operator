@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Masterminds/semver"
 	"github.com/cisco-open/operator-tools/pkg/reconciler"
 	"github.com/go-logr/logr"
 	"github.com/samber/lo"
@@ -133,29 +132,12 @@ func (r *TLSReconciler) handleAdminCertificate() (*ctrl.Result, error) {
 	return res, nil
 }
 
-func (r *TLSReconciler) securityChangeVersion() bool {
-	newVersionConstraint, err := semver.NewConstraint(">=2.0.0")
-	if err != nil {
-		panic(err)
-	}
-
-	version, err := semver.NewVersion(r.instance.Spec.General.Version)
-	if err != nil {
-		r.logger.Error(err, "unable to parse version, assuming >= 2.0.0")
-		return true
-	}
-	return newVersionConstraint.Check(version)
-}
-
 func (r *TLSReconciler) adminCAName() string {
-	if r.securityChangeVersion() {
-		return r.instance.Spec.Security.Tls.Http.TlsCertificateConfig.CaSecret.Name
-	}
-	return r.instance.Spec.Security.Tls.Transport.TlsCertificateConfig.CaSecret.Name
+	return helpers.TlsCASecretRef(r.instance).Name
 }
 
 func (r *TLSReconciler) reconcileAdminCert() bool {
-	if r.securityChangeVersion() {
+	if helpers.SecurityChangeVersion(r.instance) {
 		return r.instance.Spec.Security.Tls.Http != nil && r.instance.Spec.Security.Tls.Transport != nil
 	}
 	return r.instance.Spec.Security.Tls.Transport != nil

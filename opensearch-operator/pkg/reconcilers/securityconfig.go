@@ -185,6 +185,7 @@ func (r *SecurityconfigReconciler) Reconcile() (ctrl.Result, error) {
 		namespace,
 		checksumval,
 		adminCertName,
+		r.determineAdminCASecret(adminCertName),
 		cmdArg,
 		r.reconcilerContext.Volumes,
 		r.reconcilerContext.VolumeMounts,
@@ -263,6 +264,15 @@ func (r *SecurityconfigReconciler) determineAdminSecret() string {
 	} else {
 		return ""
 	}
+}
+
+func (r *SecurityconfigReconciler) determineAdminCASecret(adminSecretName string) string {
+	caSecretName := helpers.TlsCASecretRef(r.instance).Name
+	// If CA comes from the same secret, keep single-secret mounting behavior.
+	if caSecretName == "" || caSecretName == adminSecretName {
+		return ""
+	}
+	return caSecretName
 }
 
 func (r *SecurityconfigReconciler) DeleteResources() (ctrl.Result, error) {

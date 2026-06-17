@@ -294,4 +294,73 @@ done;`
 			Expect(job.Spec.Template.Spec.Containers[0].Args[0]).To(Equal(cmdArg))
 		})
 	})
+
+	When("Determining admin CA secret for securityconfig update job", func() {
+		It("should use HTTP caSecret for security change versions", func() {
+			spec := opsterv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "ca-http", Namespace: "ca-http", UID: "dummyuid"},
+				Spec: opsterv1.ClusterSpec{
+					General: opsterv1.GeneralConfig{
+						Version: "2.3.0",
+					},
+					Security: &opsterv1.Security{
+						Tls: &opsterv1.TlsConfig{
+							Http: &opsterv1.TlsConfigHttp{
+								TlsCertificateConfig: opsterv1.TlsCertificateConfig{
+									CaSecret: corev1.LocalObjectReference{Name: "http-ca"},
+								},
+							},
+						},
+					},
+				},
+			}
+			underTest := &SecurityconfigReconciler{instance: &spec}
+			Expect(underTest.determineAdminCASecret("admin-secret")).To(Equal("http-ca"))
+		})
+
+		It("should return empty when CA secret equals admin secret", func() {
+			spec := opsterv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "same-ca", Namespace: "same-ca", UID: "dummyuid"},
+				Spec: opsterv1.ClusterSpec{
+					General: opsterv1.GeneralConfig{
+						Version: "2.3.0",
+					},
+					Security: &opsterv1.Security{
+						Tls: &opsterv1.TlsConfig{
+							Http: &opsterv1.TlsConfigHttp{
+								TlsCertificateConfig: opsterv1.TlsCertificateConfig{
+									CaSecret: corev1.LocalObjectReference{Name: "admin-secret"},
+								},
+							},
+						},
+					},
+				},
+			}
+			underTest := &SecurityconfigReconciler{instance: &spec}
+			Expect(underTest.determineAdminCASecret("admin-secret")).To(BeEmpty())
+		})
+
+		It("should use transport caSecret for pre-2.0 versions", func() {
+			spec := opsterv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "ca-transport", Namespace: "ca-transport", UID: "dummyuid"},
+				Spec: opsterv1.ClusterSpec{
+					General: opsterv1.GeneralConfig{
+						Version: "1.3.0",
+					},
+					Security: &opsterv1.Security{
+						Tls: &opsterv1.TlsConfig{
+							Transport: &opsterv1.TlsConfigTransport{
+								TlsCertificateConfig: opsterv1.TlsCertificateConfig{
+									CaSecret: corev1.LocalObjectReference{Name: "transport-ca"},
+								},
+							},
+						},
+					},
+				},
+			}
+			underTest := &SecurityconfigReconciler{instance: &spec}
+			Expect(underTest.determineAdminCASecret("admin-secret")).To(Equal("transport-ca"))
+		})
+	})
+
 })

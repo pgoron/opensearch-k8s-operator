@@ -631,8 +631,42 @@ var _ = Describe("Builders", func() {
 			var sts = NewSTSForNodePool("foobar", &clusterObject, nodePool, "foobar", nil, nil, nil)
 			Expect(sts.Spec.Template.Spec.ServiceAccountName).To(Equal(serviceAccount))
 
-			var job = NewSecurityconfigUpdateJob(&clusterObject, "foobar", "foobar", "foobar", "admin-cert", "cmd", nil, nil)
+			var job = NewSecurityconfigUpdateJob(&clusterObject, "foobar", "foobar", "foobar", "admin-cert", "", "cmd", nil, nil)
 			Expect(job.Spec.Template.Spec.ServiceAccountName).To(Equal(serviceAccount))
+		})
+	})
+
+	When("Configuring Security Config UpdateJob CA mount", func() {
+		It("should mount admin cert as a secret volume when no separate CA secret is configured", func() {
+			var clusterObject = ClusterDescWithVersion("2.2.1")
+			job := NewSecurityconfigUpdateJob(&clusterObject, "dummy", "dummy", "dummy", "admin-cert", "", "dummy", nil, nil)
+
+			adminVolume := job.Spec.Template.Spec.Volumes[0]
+			Expect(adminVolume.Name).To(Equal("admin-cert"))
+			Expect(adminVolume.Secret).ToNot(BeNil())
+			Expect(adminVolume.Secret.SecretName).To(Equal("admin-cert"))
+			Expect(adminVolume.Projected).To(BeNil())
+		})
+
+		It("should project CA cert into admin-cert mount when configured separately", func() {
+			var clusterObject = ClusterDescWithVersion("2.2.1")
+			job := NewSecurityconfigUpdateJob(&clusterObject, "dummy", "dummy", "dummy", "admin-cert", "http-ca", "dummy", nil, nil)
+
+			adminVolume := job.Spec.Template.Spec.Volumes[0]
+			Expect(adminVolume.Name).To(Equal("admin-cert"))
+			Expect(adminVolume.Projected).ToNot(BeNil())
+			Expect(adminVolume.Projected.Sources).To(HaveLen(2))
+			Expect(adminVolume.Projected.Sources[0].Secret).ToNot(BeNil())
+			Expect(adminVolume.Projected.Sources[0].Secret.Name).To(Equal("admin-cert"))
+			Expect(adminVolume.Projected.Sources[0].Secret.Items).To(ConsistOf(
+				corev1.KeyToPath{Key: corev1.TLSCertKey, Path: corev1.TLSCertKey},
+				corev1.KeyToPath{Key: corev1.TLSPrivateKeyKey, Path: corev1.TLSPrivateKeyKey},
+			))
+			Expect(adminVolume.Projected.Sources[1].Secret).ToNot(BeNil())
+			Expect(adminVolume.Projected.Sources[1].Secret.Name).To(Equal("http-ca"))
+			Expect(adminVolume.Projected.Sources[1].Secret.Items).To(ConsistOf(
+				corev1.KeyToPath{Key: "ca.crt", Path: "ca.crt"},
+			))
 		})
 	})
 })
