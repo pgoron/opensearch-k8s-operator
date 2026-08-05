@@ -224,6 +224,37 @@ var _ = Describe("OpenSearchClusterValidator", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(warnings).To(BeEmpty())
 		})
+
+		It("should allow OpenSearch 2.x with external HTTP TLS and generated admin cert", func() {
+			cluster := &opensearchv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+				},
+				Spec: opensearchv1.ClusterSpec{
+					General: opensearchv1.GeneralConfig{
+						Version: "2.19.6",
+					},
+					Security: &opensearchv1.Security{
+						Tls: &opensearchv1.TlsConfig{
+							Transport: &opensearchv1.TlsConfigTransport{
+								Generate: true,
+							},
+							Http: &opensearchv1.TlsConfigHttp{
+								Generate: false,
+								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+									Secret: corev1.LocalObjectReference{Name: "external-http-cert"},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			warnings, err := validator.ValidateCreate(ctx, cluster)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(warnings).To(BeEmpty())
+		})
 	})
 
 	Describe("ValidateUpdate", func() {

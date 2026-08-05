@@ -168,7 +168,7 @@ func (v *OpenSearchClusterValidator) validateTlsConfig(cluster *opensearchv1.Ope
 			return nil, nil
 		} else {
 			if helpers.SecurityChangeVersion(cluster) {
-				if tlsConfig.Http != nil && tlsConfig.Http.Generate {
+				if tlsConfig.Http != nil && (tlsConfig.Http.Generate || tlsConfig.Http.Secret.Name != "") {
 					return nil, nil
 				} else {
 					return nil, fmt.Errorf("admin secret name is not provided but http.tls generate is not true")
