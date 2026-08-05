@@ -516,19 +516,24 @@ func (r *TLSReconciler) handleHttp() error {
 			//		r.recorder.Event(r.instance, "Warning", "Security", "Notice - Not all secrets for http provided")
 			return err
 		}
-		if tlsConfig.TlsCertificateConfig.CaSecret.Name == "" {
+		switch name := tlsConfig.TlsCertificateConfig.CaSecret.Name; name {
+		case "", tlsConfig.TlsCertificateConfig.Secret.Name:
 			mountFolder("http", "certs", tlsConfig.TlsCertificateConfig.Secret.Name, r.reconcilerContext)
-		} else {
-			mount("http", "ca", CaCertKey, tlsConfig.TlsCertificateConfig.CaSecret.Name, r.reconcilerContext)
-			mount("http", "key", corev1.TLSPrivateKeyKey, tlsConfig.TlsCertificateConfig.Secret.Name, r.reconcilerContext)
-			mount("http", "cert", corev1.TLSCertKey, tlsConfig.TlsCertificateConfig.Secret.Name, r.reconcilerContext)
+		default:
+			mountFolder("http", "certs", tlsConfig.TlsCertificateConfig.Secret.Name, r.reconcilerContext)
+			mountFolder("http", "ca", name, r.reconcilerContext)
 		}
 	}
 	// Extend opensearch.yml
 	r.reconcilerContext.AddConfig("plugins.security.ssl.http.enabled", "true")
 	r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemcert_filepath", fmt.Sprintf("tls-http/%s", corev1.TLSCertKey))
 	r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemkey_filepath", fmt.Sprintf("tls-http/%s", corev1.TLSPrivateKeyKey))
-	r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemtrustedcas_filepath", fmt.Sprintf("tls-http/%s", CaCertKey))
+	if tlsConfig.Generate || tlsConfig.TlsCertificateConfig.CaSecret.Name == "" ||
+		tlsConfig.TlsCertificateConfig.CaSecret.Name == tlsConfig.TlsCertificateConfig.Secret.Name {
+		r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemtrustedcas_filepath", fmt.Sprintf("tls-http/%s", CaCertKey))
+	} else {
+		r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemtrustedcas_filepath", fmt.Sprintf("tls-http-ca/%s", CaCertKey))
+	}
 	return nil
 }
 
@@ -559,7 +564,11 @@ func mount(interfaceName string, name string, filename string, secretName string
 func mountFolder(interfaceName string, name string, secretName string, reconcilerContext *ReconcilerContext) {
 	volume := corev1.Volume{Name: interfaceName + "-" + name, VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secretName}}}
 	reconcilerContext.Volumes = append(reconcilerContext.Volumes, volume)
-	mount := corev1.VolumeMount{Name: interfaceName + "-" + name, MountPath: fmt.Sprintf("/usr/share/opensearch/config/tls-%s", interfaceName)}
+	mountPath := fmt.Sprintf("/usr/share/opensearch/config/tls-%s", interfaceName)
+	if name == "ca" {
+		mountPath = fmt.Sprintf("/usr/share/opensearch/config/tls-%s-ca", interfaceName)
+	}
+	mount := corev1.VolumeMount{Name: interfaceName + "-" + name, MountPath: mountPath}
 	reconcilerContext.VolumeMounts = append(reconcilerContext.VolumeMounts, mount)
 }
 

@@ -194,16 +194,37 @@ var _ = Describe("TLS Controller", func() {
 			_, err := underTest.Reconcile()
 			Expect(err).ToNot(HaveOccurred())
 
-			Expect(reconcilerContext.Volumes).Should(HaveLen(6))
-			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(6))
+			Expect(reconcilerContext.Volumes).Should(HaveLen(5))
+			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(5))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "casecret-transport", "transport-ca")).Should((BeTrue()))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "cert-transport", "transport-key")).Should((BeTrue()))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "cert-transport", "transport-cert")).Should((BeTrue()))
-			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "casecret-http", "http-ca")).Should((BeTrue()))
-			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "cert-http", "http-key")).Should((BeTrue()))
-			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "cert-http", "http-cert")).Should((BeTrue()))
 
-			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.nodes_dn"]
+			httpVolume := reconcilerContext.Volumes[3]
+			Expect(httpVolume.Name).To(Equal("http-certs"))
+			Expect(httpVolume.Secret).ToNot(BeNil())
+			Expect(httpVolume.Secret.SecretName).To(Equal("cert-http"))
+
+			httpMount := reconcilerContext.VolumeMounts[3]
+			Expect(httpMount.Name).To(Equal("http-certs"))
+			Expect(httpMount.MountPath).To(Equal("/usr/share/opensearch/config/tls-http"))
+			Expect(httpMount.SubPath).To(BeEmpty())
+
+			httpCAVolume := reconcilerContext.Volumes[4]
+			Expect(httpCAVolume.Name).To(Equal("http-ca"))
+			Expect(httpCAVolume.Secret).ToNot(BeNil())
+			Expect(httpCAVolume.Secret.SecretName).To(Equal("casecret-http"))
+
+			httpCAMount := reconcilerContext.VolumeMounts[4]
+			Expect(httpCAMount.Name).To(Equal("http-ca"))
+			Expect(httpCAMount.MountPath).To(Equal("/usr/share/opensearch/config/tls-http-ca"))
+			Expect(httpCAMount.SubPath).To(BeEmpty())
+
+			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.ssl.http.pemtrustedcas_filepath"]
+			Expect(exists).To(BeTrue())
+			Expect(value).To(Equal("tls-http-ca/ca.crt"))
+
+			value, exists = reconcilerContext.OpenSearchConfig["plugins.security.nodes_dn"]
 			Expect(exists).To(BeTrue())
 			Expect(value).To(Equal("[\"CN=mycn\",\"CN=othercn\"]"))
 			value, exists = reconcilerContext.OpenSearchConfig["plugins.security.authcz.admin_dn"]
@@ -301,6 +322,10 @@ var _ = Describe("TLS Controller", func() {
 			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.nodes_dn"]
 			Expect(exists).To(BeTrue())
 			Expect(value).To(Equal("[\"CN=tls-withca-*,OU=tls-withca\"]"))
+
+			value, exists = reconcilerContext.OpenSearchConfig["plugins.security.ssl.http.pemtrustedcas_filepath"]
+			Expect(exists).To(BeTrue())
+			Expect(value).To(Equal("tls-http/ca.crt"))
 		})
 	})
 
