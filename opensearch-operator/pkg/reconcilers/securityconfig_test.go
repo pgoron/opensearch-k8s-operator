@@ -296,7 +296,7 @@ done;`
 	})
 
 	When("Determining admin CA secret for securityconfig update job", func() {
-		It("should use HTTP caSecret for security change versions", func() {
+		It("should use the external HTTP certificate secret for security change versions", func() {
 			spec := opsterv1.OpenSearchCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: "ca-http", Namespace: "ca-http", UID: "dummyuid"},
 				Spec: opsterv1.ClusterSpec{
@@ -307,7 +307,8 @@ done;`
 						Tls: &opsterv1.TlsConfig{
 							Http: &opsterv1.TlsConfigHttp{
 								TlsCertificateConfig: opsterv1.TlsCertificateConfig{
-									CaSecret: corev1.LocalObjectReference{Name: "http-ca"},
+									Secret:   corev1.LocalObjectReference{Name: "http-cert"},
+									CaSecret: corev1.LocalObjectReference{Name: "ca-http-ca"},
 								},
 							},
 						},
@@ -315,7 +316,7 @@ done;`
 				},
 			}
 			underTest := &SecurityconfigReconciler{instance: &spec}
-			Expect(underTest.determineAdminCASecret("admin-secret")).To(Equal("http-ca"))
+			Expect(underTest.determineAdminCASecret("admin-secret")).To(Equal("http-cert"))
 		})
 
 		It("should return empty when CA secret equals admin secret", func() {
@@ -329,7 +330,8 @@ done;`
 						Tls: &opsterv1.TlsConfig{
 							Http: &opsterv1.TlsConfigHttp{
 								TlsCertificateConfig: opsterv1.TlsCertificateConfig{
-									CaSecret: corev1.LocalObjectReference{Name: "admin-secret"},
+									Secret:   corev1.LocalObjectReference{Name: "admin-secret"},
+									CaSecret: corev1.LocalObjectReference{Name: "same-ca-ca"},
 								},
 							},
 						},
@@ -338,6 +340,27 @@ done;`
 			}
 			underTest := &SecurityconfigReconciler{instance: &spec}
 			Expect(underTest.determineAdminCASecret("admin-secret")).To(BeEmpty())
+		})
+
+		It("should use the generated HTTP certificate secret for security change versions", func() {
+			spec := opsterv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "generated-http", Namespace: "generated-http", UID: "dummyuid"},
+				Spec: opsterv1.ClusterSpec{
+					General: opsterv1.GeneralConfig{Version: "2.3.0"},
+					Security: &opsterv1.Security{
+						Tls: &opsterv1.TlsConfig{
+							Http: &opsterv1.TlsConfigHttp{
+								Generate: true,
+								TlsCertificateConfig: opsterv1.TlsCertificateConfig{
+									CaSecret: corev1.LocalObjectReference{Name: "generated-http-ca"},
+								},
+							},
+						},
+					},
+				},
+			}
+			underTest := &SecurityconfigReconciler{instance: &spec}
+			Expect(underTest.determineAdminCASecret("generated-http-admin-cert")).To(Equal("generated-http-http-cert"))
 		})
 
 		It("should use transport caSecret for pre-2.0 versions", func() {
