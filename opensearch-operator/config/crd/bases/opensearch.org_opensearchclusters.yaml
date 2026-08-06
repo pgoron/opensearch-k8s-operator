@@ -7132,10 +7132,9 @@ spec:
                         type: object
                         x-kubernetes-map-type: atomic
                       adminSecret:
-                        description: TLS Secret that contains a client certificate
-                          (tls.key, tls.crt, ca.crt) with admin rights in the opensearch
-                          cluster. Must be set if http certificates are provided by
-                          user and not generated
+                        description: |-
+                          Optional TLS secret that contains a client certificate (tls.key, tls.crt, ca.crt) with admin rights in the opensearch cluster.
+                          When omitted, the operator automatically creates a `<cluster>-admin-cert` secret containing a generated admin client certificate.
                         properties:
                           name:
                             default: ""

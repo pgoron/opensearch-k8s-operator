@@ -137,7 +137,6 @@ func (r *SecurityconfigReconciler) Reconcile() (ctrl.Result, error) {
 
 	configSecretName = helpers.GeneratedSecurityConfigSecretName(r.instance)
 
-	// TODO(joseb): Check if admin certificate is provided or generated in webhook
 	if adminCertName == "" {
 		err := errors.New("admin certificate neither provided nor generation is enabled")
 		r.logger.Error(err, "Skipping securityconfig reconciliation")
@@ -255,7 +254,7 @@ func (r *SecurityconfigReconciler) Reconcile() (ctrl.Result, error) {
 		namespace,
 		checksumval,
 		adminCertName,
-		r.determineAdminCASecret(adminCertName),
+		r.determineEndpointCACertSecret(),
 		cmdArg,
 		r.reconcilerContext.Volumes,
 		r.reconcilerContext.VolumeMounts,
@@ -334,8 +333,7 @@ func (r *SecurityconfigReconciler) determineAdminSecret() string {
 			return r.instance.Spec.Security.Config.AdminSecret.Name
 		}
 	}
-	// Webhook validation ensures that if security plugin is enabled and no AdminSecret is provided,
-	// then TLS Generate must be true. So we can safely return the default admin cert name.
+	// The TLS reconciler generates the default admin certificate when no AdminSecret is provided.
 	if helpers.IsSecurityPluginEnabled(r.instance) {
 		return fmt.Sprintf("%s-admin-cert", r.instance.Name)
 	}
@@ -343,11 +341,14 @@ func (r *SecurityconfigReconciler) determineAdminSecret() string {
 	return ""
 }
 
-func (r *SecurityconfigReconciler) determineAdminCASecret(adminSecretName string) string {
-	caSecretName := helpers.TlsCASecretRef(r.instance).Name
-	// If CA comes from the same secret, keep single-secret mounting behavior.
-	if caSecretName == "" || caSecretName == adminSecretName {
-		return ""
+func (r *SecurityconfigReconciler) determineEndpointCACertSecret() string {
+	caSecretName := ""
+	if r.instance.Spec.Security != nil && r.instance.Spec.Security.Tls != nil {
+		if helpers.SecurityChangeVersion(r.instance) {
+			caSecretName = helpers.HTTPEndpointCACertSecretRef(r.instance.Name, r.instance.Spec.Security.Tls.Http).Name
+		} else {
+			caSecretName = helpers.TransportEndpointCACertSecretRef(r.instance.Name, r.instance.Spec.Security.Tls.Transport).Name
+		}
 	}
 	return caSecretName
 }

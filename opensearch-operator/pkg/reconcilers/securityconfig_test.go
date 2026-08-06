@@ -512,10 +512,10 @@ done;`
 		})
 	})
 
-	When("Determining admin CA secret for securityconfig update job", func() {
-		It("should use HTTP caSecret for security change versions", func() {
+	When("Determining secret containing endpoint ca.crt for securityconfig update job", func() {
+		It("should use specified http certificate for >= 2.0 versions", func() {
 			spec := opensearchv1.OpenSearchCluster{
-				ObjectMeta: metav1.ObjectMeta{Name: "ca-http", Namespace: "ca-http", UID: "dummyuid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "cluster", UID: "dummyuid"},
 				Spec: opensearchv1.ClusterSpec{
 					General: opensearchv1.GeneralConfig{
 						Version: "2.3.0",
@@ -524,7 +524,8 @@ done;`
 						Tls: &opensearchv1.TlsConfig{
 							Http: &opensearchv1.TlsConfigHttp{
 								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
-									CaSecret: corev1.LocalObjectReference{Name: "http-ca"},
+									Secret:   corev1.LocalObjectReference{Name: "http-cert"},
+									CaSecret: corev1.LocalObjectReference{Name: "custom-admin-ca"},
 								},
 							},
 						},
@@ -532,21 +533,20 @@ done;`
 				},
 			}
 			underTest := &SecurityconfigReconciler{instance: &spec}
-			Expect(underTest.determineAdminCASecret("admin-secret")).To(Equal("http-ca"))
+			Expect(underTest.determineEndpointCACertSecret()).To(Equal("http-cert"))
 		})
 
-		It("should return empty when CA secret equals admin secret", func() {
+		It("should use generated http certificate for >= 2.0 versions", func() {
 			spec := opensearchv1.OpenSearchCluster{
-				ObjectMeta: metav1.ObjectMeta{Name: "same-ca", Namespace: "same-ca", UID: "dummyuid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "cluster", UID: "dummyuid"},
 				Spec: opensearchv1.ClusterSpec{
-					General: opensearchv1.GeneralConfig{
-						Version: "2.3.0",
-					},
+					General: opensearchv1.GeneralConfig{Version: "2.3.0"},
 					Security: &opensearchv1.Security{
 						Tls: &opensearchv1.TlsConfig{
 							Http: &opensearchv1.TlsConfigHttp{
+								Generate: true,
 								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
-									CaSecret: corev1.LocalObjectReference{Name: "admin-secret"},
+									CaSecret: corev1.LocalObjectReference{Name: "custom-admin-ca"},
 								},
 							},
 						},
@@ -554,12 +554,12 @@ done;`
 				},
 			}
 			underTest := &SecurityconfigReconciler{instance: &spec}
-			Expect(underTest.determineAdminCASecret("admin-secret")).To(BeEmpty())
+			Expect(underTest.determineEndpointCACertSecret()).To(Equal("cluster-http-cert"))
 		})
 
-		It("should use transport caSecret for pre-2.0 versions", func() {
+		It("should use specified transport certificate for < 2.0 versions", func() {
 			spec := opensearchv1.OpenSearchCluster{
-				ObjectMeta: metav1.ObjectMeta{Name: "ca-transport", Namespace: "ca-transport", UID: "dummyuid"},
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "cluster", UID: "dummyuid"},
 				Spec: opensearchv1.ClusterSpec{
 					General: opensearchv1.GeneralConfig{
 						Version: "1.3.0",
@@ -567,6 +567,30 @@ done;`
 					Security: &opensearchv1.Security{
 						Tls: &opensearchv1.TlsConfig{
 							Transport: &opensearchv1.TlsConfigTransport{
+								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+									Secret:   corev1.LocalObjectReference{Name: "transport-cert"},
+									CaSecret: corev1.LocalObjectReference{Name: "transport-ca"},
+								},
+							},
+						},
+					},
+				},
+			}
+			underTest := &SecurityconfigReconciler{instance: &spec}
+			Expect(underTest.determineEndpointCACertSecret()).To(Equal("transport-cert"))
+		})
+
+		It("should use generated transport certificate for < 2.0 versions", func() {
+			spec := opensearchv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "cluster", UID: "dummyuid"},
+				Spec: opensearchv1.ClusterSpec{
+					General: opensearchv1.GeneralConfig{
+						Version: "1.3.0",
+					},
+					Security: &opensearchv1.Security{
+						Tls: &opensearchv1.TlsConfig{
+							Transport: &opensearchv1.TlsConfigTransport{
+								Generate: true,
 								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
 									CaSecret: corev1.LocalObjectReference{Name: "transport-ca"},
 								},
@@ -576,13 +600,14 @@ done;`
 				},
 			}
 			underTest := &SecurityconfigReconciler{instance: &spec}
-			Expect(underTest.determineAdminCASecret("admin-secret")).To(Equal("transport-ca"))
+			Expect(underTest.determineEndpointCACertSecret()).To(Equal("cluster-transport-cert"))
 		})
 	})
 
 	When("Reconciling with external TLS certs and separate caSecret", func() {
 		const (
 			externalClusterName = "external-tls"
+			adminSecretName     = "my-admin-secret"
 			tlsSecretName       = "my-tls-secret"
 			caSecretName        = "my-ca-secret"
 		)
@@ -596,7 +621,7 @@ done;`
 			return corev1.Volume{}
 		}
 
-		It("should project admin-cert from TLS secret and caSecret when reconciling", func() {
+		It("should project admin cert with the HTTP certificate CA when reconciling", func() {
 			mockClient := k8s.NewMockK8sClient(GinkgoT())
 
 			adminCredSecret := newAdminCredentialsSecret(externalClusterName)
@@ -618,7 +643,7 @@ done;`
 						Config: &opensearchv1.SecurityConfig{
 							SecurityconfigSecret:   corev1.LocalObjectReference{Name: "securityconfig-secret"},
 							AdminCredentialsSecret: corev1.LocalObjectReference{Name: adminCredsName},
-							AdminSecret:            corev1.LocalObjectReference{Name: tlsSecretName},
+							AdminSecret:            corev1.LocalObjectReference{Name: adminSecretName},
 						},
 						Tls: &opensearchv1.TlsConfig{
 							Transport: &opensearchv1.TlsConfigTransport{
@@ -686,12 +711,12 @@ done;`
 			adminVolume := findJobVolume(*createdJob, "admin-cert")
 			Expect(adminVolume.Projected).ToNot(BeNil())
 			Expect(adminVolume.Projected.Sources).To(HaveLen(2))
-			Expect(adminVolume.Projected.Sources[0].Secret.Name).To(Equal(tlsSecretName))
+			Expect(adminVolume.Projected.Sources[0].Secret.Name).To(Equal(adminSecretName))
 			Expect(adminVolume.Projected.Sources[0].Secret.Items).To(ConsistOf(
 				corev1.KeyToPath{Key: corev1.TLSCertKey, Path: corev1.TLSCertKey},
 				corev1.KeyToPath{Key: corev1.TLSPrivateKeyKey, Path: corev1.TLSPrivateKeyKey},
 			))
-			Expect(adminVolume.Projected.Sources[1].Secret.Name).To(Equal(caSecretName))
+			Expect(adminVolume.Projected.Sources[1].Secret.Name).To(Equal(tlsSecretName))
 			Expect(adminVolume.Projected.Sources[1].Secret.Items).To(ConsistOf(
 				corev1.KeyToPath{Key: "ca.crt", Path: "ca.crt"},
 			))

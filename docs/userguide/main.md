@@ -322,7 +322,9 @@ If you provide your own certificates, please make sure the following names are a
 
 Directly exposing the node HTTP port outside the Kubernetes cluster is not recommended. Rather than doing so, you should configure an ingress. The ingress can then also present a certificate from an accredited CA (for example LetsEncrypt) and hide self-signed certificates that are being used internally. In this way, the nodes should be supplied internally with properly signed certificates.
 
-If you provide your own node certificates you must also provide an admin cert that the operator can use for managing the cluster:
+If you provide your own HTTP certificate, the operator can still generate the admin client certificate used to manage the cluster. When `adminSecret.name` is omitted, the operator automatically creates a `<cluster-name>-admin-cert` secret containing a generated admin client certificate and configures OpenSearch to trust the `ca.crt` bundled in that secret.
+
+You can also provide your own admin client certificate:
 
 ```yaml
 spec:
@@ -332,7 +334,7 @@ spec:
         name: my-first-cluster-admin-cert # The secret must have keys tls.crt and tls.key
 ```
 
-Make sure the DN of the certificate is set in the `adminDn` field.
+If you provide your own admin client certificate, make sure the DN of the certificate is set in the `adminDn` field.
 
 ### Adding plugins
 
@@ -1479,9 +1481,11 @@ In addition, you can provide the name of a secret as `adminCredentialsSecret.nam
 
 Similarly, for OpenSearch Dashboards, if you don't provide `dashboards.opensearchCredentialsSecret`, the operator automatically creates `<cluster-name>-dashboards-password` with a **random password** for the `kibanaserver` user and automatically generates the password hash and adds it to the generated securityconfig.
 
-You must also configure SSL/TLS HTTP. You can either let the operator generate all needed certificates or supply them yourself. If you use your own certificates you must also provide an admin certificate that the operator can use to apply the securityconfig.
+You must also configure SSL/TLS HTTP. You can either let the operator generate all needed certificates or supply the HTTP server certificate yourself.
 
-If you provided your own certificate for SSL/TLS HTTP, then you must also provide an admin client certificate (as a Kubernetes TLS secret with fields `ca.crt`, `tls.key` and `tls.crt`) as `adminSecret.name`. The DN of the certificate must be listed under `security.tls.http.adminDn`. Be advised that the `adminDn` must be defined in a way that the admin certficate cannot be used or recognized as a node certficiate, otherwise OpenSearch will reject any authentication request using the admin certificate.
+If you provide your own certificate for SSL/TLS HTTP and omit `adminSecret.name`, the operator automatically creates a `<cluster-name>-admin-cert` secret containing a generated admin client certificate and configures the HTTP endpoint to trust the `ca.crt` bundled in that secret. The `securityconfig` job still trusts the HTTP server through the `ca.crt` bundled in the HTTP certificate secret.
+
+If you provide your own admin client certificate (as a Kubernetes TLS secret with fields `ca.crt`, `tls.key` and `tls.crt`) as `adminSecret.name`, the DN of the certificate must be listed under `security.tls.http.adminDn`. When `security.tls.http.caSecret.name` is omitted, OpenSearch trusts the `ca.crt` bundled in the admin secret for HTTP client certificate authentication. Be advised that the `adminDn` must be defined in a way that the admin certificate cannot be used or recognized as a node certificate, otherwise OpenSearch will reject any authentication request using the admin certificate.
 
 To apply the securityconfig to the OpenSearch cluster, the Operator uses a separate Kubernetes job (named `<cluster-name>-securityconfig-update`). This job is run during the initial provisioning of the cluster. The Operator also monitors the secret with the securityconfig for any changes and then reruns the update job to apply the new config. Note that the Operator only checks for changes in certain intervals, so it might take a minute or two for the changes to be applied. If the changes are not applied after a few minutes, please use 'kubectl' to check the logs of the pod of the `<cluster-name>-securityconfig-update` job. If you have an error in your configuration it will be reported there.
 

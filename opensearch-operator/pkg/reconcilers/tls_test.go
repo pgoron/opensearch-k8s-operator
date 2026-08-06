@@ -30,6 +30,15 @@ func newTLSReconciler(k8sClient *k8s.MockK8sClient, spec *opensearchv1.OpenSearc
 	return &reconcilerContext, underTest
 }
 
+func findTLSVolume(volumes []corev1.Volume, name string) *corev1.Volume {
+	for i := range volumes {
+		if volumes[i].Name == name {
+			return &volumes[i]
+		}
+	}
+	return nil
+}
+
 var _ = Describe("TLS Controller", func() {
 
 	Context("When Reconciling the TLS configuration with no existing secrets", func() {
@@ -66,14 +75,21 @@ var _ = Describe("TLS Controller", func() {
 			reconcilerContext, underTest := newTLSReconciler(mockClient, &spec)
 			_, err := underTest.Reconcile()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(reconcilerContext.Volumes).Should(HaveLen(2))
-			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(2))
+			Expect(reconcilerContext.Volumes).Should(HaveLen(3))
+			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(3))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, adminSecretName, "http-ca")).Should(BeTrue())
+			httpCAVolume := findTLSVolume(reconcilerContext.Volumes, "http-ca")
+			Expect(httpCAVolume).ToNot(BeNil())
+			Expect(httpCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
 			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.nodes_dn"]
 			Expect(exists).To(BeTrue())
 			Expect(value).To(Equal("[\"CN=tls-test,OU=tls-test\"]"))
 			value, exists = reconcilerContext.OpenSearchConfig["plugins.security.authcz.admin_dn"]
 			Expect(exists).To(BeTrue())
 			Expect(value).To(Equal("[\"CN=admin,OU=tls-test\"]"))
+			value, exists = reconcilerContext.OpenSearchConfig["plugins.security.ssl.http.pemtrustedcas_filepath"]
+			Expect(exists).To(BeTrue())
+			Expect(value).To(Equal("tls-http-ca/ca.crt"))
 		})
 	})
 
@@ -145,8 +161,12 @@ var _ = Describe("TLS Controller", func() {
 			_, err := underTest.Reconcile()
 			Expect(err).ToNot(HaveOccurred())
 
-			Expect(reconcilerContext.Volumes).Should(HaveLen(2))
-			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(2))
+			Expect(reconcilerContext.Volumes).Should(HaveLen(3))
+			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(3))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, adminSecretName, "http-ca")).Should(BeTrue())
+			httpCAVolume := findTLSVolume(reconcilerContext.Volumes, "http-ca")
+			Expect(httpCAVolume).ToNot(BeNil())
+			Expect(httpCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
 
 			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.nodes_dn"]
 			Expect(exists).To(BeTrue())
@@ -200,11 +220,16 @@ var _ = Describe("TLS Controller", func() {
 
 			Expect(reconcilerContext.Volumes).Should(HaveLen(4))
 			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(4))
-			// With new mounting logic: CaSecret.Name != Secret.Name, so we mount both as directories
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "casecret-transport", "transport-ca")).Should((BeTrue()))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "cert-transport", "transport-certs")).Should((BeTrue()))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "casecret-http", "http-ca")).Should((BeTrue()))
-			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "cert-http", "http-certs")).Should((BeTrue()))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "cert-http", "http-cert")).Should((BeTrue()))
+			transportCAVolume := findTLSVolume(reconcilerContext.Volumes, "transport-ca")
+			Expect(transportCAVolume).ToNot(BeNil())
+			Expect(transportCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
+			httpCAVolume := findTLSVolume(reconcilerContext.Volumes, "http-ca")
+			Expect(httpCAVolume).ToNot(BeNil())
+			Expect(httpCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
 
 			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.nodes_dn"]
 			Expect(exists).To(BeTrue())
@@ -212,6 +237,64 @@ var _ = Describe("TLS Controller", func() {
 			value, exists = reconcilerContext.OpenSearchConfig["plugins.security.authcz.admin_dn"]
 			Expect(exists).To(BeTrue())
 			Expect(value).To(Equal("[\"CN=admin,OU=" + clusterName + "\"]"))
+		})
+
+		It("Should trust the admin secret CA when HTTP caSecret is omitted", func() {
+			clusterName := "tls-test-admin-ca"
+			adminSecretName := "custom-admin-cert"
+			spec := opensearchv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: clusterName, UID: "dummyuid"},
+				Spec: opensearchv1.ClusterSpec{
+					General: opensearchv1.GeneralConfig{Version: "2.8.0"},
+					Security: &opensearchv1.Security{
+						Config: &opensearchv1.SecurityConfig{
+							AdminSecret: corev1.LocalObjectReference{Name: adminSecretName},
+						},
+						Tls: &opensearchv1.TlsConfig{
+							Transport: &opensearchv1.TlsConfigTransport{
+								Generate: false,
+								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+									Secret:   corev1.LocalObjectReference{Name: "cert-transport"},
+									CaSecret: corev1.LocalObjectReference{Name: "casecret-transport"},
+								},
+								NodesDn: []string{"CN=mycn"},
+							},
+							Http: &opensearchv1.TlsConfigHttp{
+								Generate: false,
+								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+									Secret: corev1.LocalObjectReference{Name: "cert-http"},
+								},
+								AdminDn: []string{"CN=admin"},
+							},
+						},
+					},
+				},
+			}
+
+			mockClient := k8s.NewMockK8sClient(GinkgoT())
+			reconcilerContext, underTest := newTLSReconciler(mockClient, &spec)
+			_, err := underTest.Reconcile()
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(reconcilerContext.Volumes).Should(HaveLen(4))
+			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(4))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "casecret-transport", "transport-ca")).Should(BeTrue())
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "cert-transport", "transport-certs")).Should(BeTrue())
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "cert-http", "http-cert")).Should(BeTrue())
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, adminSecretName, "http-ca")).Should(BeTrue())
+			transportCAVolume := findTLSVolume(reconcilerContext.Volumes, "transport-ca")
+			Expect(transportCAVolume).ToNot(BeNil())
+			Expect(transportCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
+			httpCAVolume := findTLSVolume(reconcilerContext.Volumes, "http-ca")
+			Expect(httpCAVolume).ToNot(BeNil())
+			Expect(httpCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
+
+			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.ssl.http.pemtrustedcas_filepath"]
+			Expect(exists).To(BeTrue())
+			Expect(value).To(Equal("tls-http-ca/ca.crt"))
+			value, exists = reconcilerContext.OpenSearchConfig["plugins.security.authcz.admin_dn"]
+			Expect(exists).To(BeTrue())
+			Expect(value).To(Equal("[\"CN=admin\"]"))
 		})
 	})
 
@@ -255,14 +338,21 @@ var _ = Describe("TLS Controller", func() {
 			reconcilerContext, underTest := newTLSReconciler(mockClient, &spec)
 			_, err := underTest.Reconcile()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(reconcilerContext.Volumes).Should(HaveLen(2))
-			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(2))
+			Expect(reconcilerContext.Volumes).Should(HaveLen(3))
+			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(3))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "my-transport-certs", "transport-certs")).Should((BeTrue()))
-			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "my-http-certs", "http-certs")).Should((BeTrue()))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "my-http-certs", "http-cert")).Should((BeTrue()))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, clusterName+"-admin-cert", "http-ca")).Should(BeTrue())
+			httpCAVolume := findTLSVolume(reconcilerContext.Volumes, "http-ca")
+			Expect(httpCAVolume).ToNot(BeNil())
+			Expect(httpCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
 
 			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.nodes_dn"]
 			Expect(exists).To(BeTrue())
 			Expect(value).To(Equal("[\"CN=mycn\",\"CN=othercn\"]"))
+			value, exists = reconcilerContext.OpenSearchConfig["plugins.security.ssl.http.pemtrustedcas_filepath"]
+			Expect(exists).To(BeTrue())
+			Expect(value).To(Equal("tls-http-ca/ca.crt"))
 		})
 	})
 
@@ -313,20 +403,22 @@ var _ = Describe("TLS Controller", func() {
 			_, err := underTest.Reconcile()
 			Expect(err).ToNot(HaveOccurred())
 
-			Expect(reconcilerContext.Volumes).Should(HaveLen(2))
-			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(2))
+			Expect(reconcilerContext.Volumes).Should(HaveLen(3))
+			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(3))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, clusterName+"-transport-cert", "transport-cert")).Should((BeTrue()))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, clusterName+"-http-cert", "http-cert")).Should((BeTrue()))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, caSecretName, "http-ca")).Should(BeTrue())
+			httpCAVolume := findTLSVolume(reconcilerContext.Volumes, "http-ca")
+			Expect(httpCAVolume).ToNot(BeNil())
+			Expect(httpCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
 
 			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.nodes_dn"]
 			Expect(exists).To(BeTrue())
 			Expect(value).To(Equal("[\"CN=tls-withca-*,OU=tls-withca\"]"))
 
-			// Verify that the CA cert path uses tls-http/ (not tls-http-ca/) since generate=true
-			// includes the CA cert in the generated secret (Fixes #1279)
 			value, exists = reconcilerContext.OpenSearchConfig["plugins.security.ssl.http.pemtrustedcas_filepath"]
 			Expect(exists).To(BeTrue())
-			Expect(value).To(Equal("tls-http/ca.crt"))
+			Expect(value).To(Equal("tls-http-ca/ca.crt"))
 		})
 	})
 
@@ -373,11 +465,14 @@ var _ = Describe("TLS Controller", func() {
 			_, err := underTest.Reconcile()
 			Expect(err).ToNot(HaveOccurred())
 
-			// Should have only 2 volumes/mounts (one for transport, one for http)
-			Expect(reconcilerContext.Volumes).Should(HaveLen(2))
-			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(2))
+			Expect(reconcilerContext.Volumes).Should(HaveLen(3))
+			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(3))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "same-secret", "transport-certs")).Should((BeTrue()))
-			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "same-secret", "http-certs")).Should((BeTrue()))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "same-secret", "http-cert")).Should((BeTrue()))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, "same-secret", "http-ca")).Should(BeTrue())
+			httpCAVolume := findTLSVolume(reconcilerContext.Volumes, "http-ca")
+			Expect(httpCAVolume).ToNot(BeNil())
+			Expect(httpCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
 		})
 	})
 
@@ -523,10 +618,14 @@ var _ = Describe("TLS Controller", func() {
 			_, err := underTest.Reconcile()
 			Expect(err).ToNot(HaveOccurred())
 
-			Expect(reconcilerContext.Volumes).Should(HaveLen(2))
-			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(2))
+			Expect(reconcilerContext.Volumes).Should(HaveLen(3))
+			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(3))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, clusterName+"-transport-cert", "transport-cert")).Should((BeTrue()))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, clusterName+"-http-cert", "http-cert")).Should((BeTrue()))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, adminSecretName, "http-ca")).Should(BeTrue())
+			httpCAVolume := findTLSVolume(reconcilerContext.Volumes, "http-ca")
+			Expect(httpCAVolume).ToNot(BeNil())
+			Expect(httpCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
 
 			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.nodes_dn"]
 			Expect(exists).To(BeTrue())
@@ -576,10 +675,14 @@ var _ = Describe("TLS Controller", func() {
 			_, err := underTest.Reconcile()
 			Expect(err).ToNot(HaveOccurred())
 
-			Expect(reconcilerContext.Volumes).Should(HaveLen(2))
-			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(2))
+			Expect(reconcilerContext.Volumes).Should(HaveLen(3))
+			Expect(reconcilerContext.VolumeMounts).Should(HaveLen(3))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, clusterName+"-transport-cert", "transport-cert")).Should((BeTrue()))
 			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, clusterName+"-http-cert", "http-cert")).Should((BeTrue()))
+			Expect(helpers.CheckVolumeExists(reconcilerContext.Volumes, reconcilerContext.VolumeMounts, adminSecretName, "http-ca")).Should(BeTrue())
+			httpCAVolume := findTLSVolume(reconcilerContext.Volumes, "http-ca")
+			Expect(httpCAVolume).ToNot(BeNil())
+			Expect(httpCAVolume.Secret.Items).To(ConsistOf(corev1.KeyToPath{Key: CaCertKey, Path: CaCertKey}))
 
 			value, exists := reconcilerContext.OpenSearchConfig["plugins.security.nodes_dn"]
 			Expect(exists).To(BeTrue())
