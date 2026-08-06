@@ -1317,7 +1317,7 @@ func NewSecurityconfigUpdateJob(
 	namespace string,
 	checksum string,
 	adminCertName string,
-	adminCASecretName string,
+	opensearchServerCASecretName string,
 	cmdArg string,
 	volumes []corev1.Volume,
 	volumeMounts []corev1.VolumeMount,
@@ -1333,7 +1333,7 @@ func NewSecurityconfigUpdateJob(
 			Secret: &corev1.SecretVolumeSource{SecretName: adminCertName},
 		},
 	}
-	if adminCASecretName != "" {
+	if opensearchServerCASecretName != "" {
 		adminCertVolume = corev1.Volume{
 			Name: "admin-cert",
 			VolumeSource: corev1.VolumeSource{
@@ -1350,7 +1350,7 @@ func NewSecurityconfigUpdateJob(
 						},
 						{
 							Secret: &corev1.SecretProjection{
-								LocalObjectReference: corev1.LocalObjectReference{Name: adminCASecretName},
+								LocalObjectReference: corev1.LocalObjectReference{Name: opensearchServerCASecretName},
 								Items: []corev1.KeyToPath{
 									{Key: "ca.crt", Path: "ca.crt"},
 								},

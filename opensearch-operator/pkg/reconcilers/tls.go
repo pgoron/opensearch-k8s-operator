@@ -218,7 +218,7 @@ func (r *TLSReconciler) adminCAConfig() corev1.LocalObjectReference {
 }
 
 func (r *TLSReconciler) shouldCreateAdminCert(ca tls.Cert) (bool, error) {
-	secret, err := r.client.GetSecret(r.adminSecretName(), r.instance.Namespace)
+	secret, err := r.client.GetSecret(r.generatedAdminSecretName(), r.instance.Namespace)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			r.logger.Info("admin cert does not exist, creating")
@@ -277,7 +277,7 @@ func (r *TLSReconciler) createAdminSecret(ca tls.Cert) (*ctrl.Result, error) {
 	}
 	adminSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.adminSecretName(),
+			Name:      r.generatedAdminSecretName(),
 			Namespace: r.instance.Namespace,
 		},
 		Type: corev1.SecretTypeTLS,
@@ -289,8 +289,35 @@ func (r *TLSReconciler) createAdminSecret(ca tls.Cert) (*ctrl.Result, error) {
 	return r.client.CreateSecret(adminSecret)
 }
 
-func (r *TLSReconciler) adminSecretName() string {
+func (r *TLSReconciler) generatedAdminSecretName() string {
 	return r.instance.Name + "-admin-cert"
+}
+
+func (r *TLSReconciler) effectiveAdminSecretName() string {
+	adminSecretName := ""
+	if r.instance.Spec.Security != nil && r.instance.Spec.Security.Config != nil {
+		adminSecretName = r.instance.Spec.Security.Config.AdminSecret.Name
+	}
+	if adminSecretName == "" {
+		adminSecretName = r.generatedAdminSecretName()
+	}
+	return adminSecretName
+}
+
+// trustedAdminCASecretName returns the secret containing ca.crt that http endpoint can trust for admin connections
+func (r *TLSReconciler) trustedAdminCASecretName() string {
+	trustedAdminCASecretName := ""
+	if r.instance.Spec.Security != nil && r.instance.Spec.Security.Tls != nil && r.instance.Spec.Security.Tls.Http != nil {
+		// user has specified a specific CA to use for admin clients
+		trustedAdminCASecretName = r.instance.Spec.Security.Tls.Http.CaSecret.Name
+	}
+
+	if trustedAdminCASecretName == "" {
+		// otherwise use ca.crt specified in admin secret
+		trustedAdminCASecretName = r.effectiveAdminSecretName()
+	}
+
+	return trustedAdminCASecretName
 }
 
 func (r *TLSReconciler) handleTransportGenerate() error {
@@ -616,7 +643,7 @@ func (r *TLSReconciler) handleHttp() error {
 	tlsConfig := r.instance.Spec.Security.Tls.Http
 	namespace := r.instance.Namespace
 	clusterName := r.instance.Name
-	nodeSecretName := clusterName + "-http-cert"
+	httpTlsSecret := clusterName + "-http-cert"
 
 	if tlsConfig.Generate {
 		r.logger.Info("Reconciling certificates", "interface", "http")
@@ -627,14 +654,14 @@ func (r *TLSReconciler) handleHttp() error {
 		}
 
 		// Generate node cert, sign it and put it into secret
-		nodeSecret, err := r.client.GetSecret(nodeSecretName, namespace)
+		nodeSecret, err := r.client.GetSecret(httpTlsSecret, namespace)
 		if err != nil {
 			if !k8serrors.IsNotFound(err) {
 				r.logger.Error(err, "Failed to get secret for http certificate")
 				return err
 			}
 
-			nodeSecret = corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: nodeSecretName, Namespace: namespace}, Type: corev1.SecretTypeTLS}
+			nodeSecret = corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: httpTlsSecret, Namespace: namespace}, Type: corev1.SecretTypeTLS}
 			if err := ctrl.SetControllerReference(r.instance, &nodeSecret, r.client.Scheme()); err != nil {
 				return err
 			}
@@ -680,59 +707,30 @@ func (r *TLSReconciler) handleHttp() error {
 			//		r.recorder.Event(r.instance, "Warning", "Security", "Failed to store node http certificate in secret")
 			return err
 		}
-
-		// Tell cluster controller to mount secrets
-		volume := corev1.Volume{Name: "http-cert", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: nodeSecretName}}}
-		r.reconcilerContext.Volumes = append(r.reconcilerContext.Volumes, volume)
-		mount := corev1.VolumeMount{Name: "http-cert", MountPath: r.instance.Spec.General.GetOpenSearchHome() + "/config/tls-http"}
-		r.reconcilerContext.VolumeMounts = append(r.reconcilerContext.VolumeMounts, mount)
+	} else if tlsConfig.Secret.Name != "" {
+		httpTlsSecret = tlsConfig.Secret.Name
 	} else {
-		if tlsConfig.Secret.Name == "" {
-			err := errors.New("missing secret in spec")
-			r.logger.Error(err, "Not all secrets for http provided")
-			//		r.recorder.Event(r.instance, "Warning", "Security", "Notice - Not all secrets for http provided")
-			return err
-		}
-
-		// Implement new mounting logic based on CaSecret.Name configuration
-		opensearchHome := r.instance.Spec.General.GetOpenSearchHome()
-		switch name := tlsConfig.CaSecret.Name; name {
-		case "":
-			// If CaSecret.Name is empty, mount Secret.Name as a directory
-			mountFolder("http", "certs", tlsConfig.Secret.Name, opensearchHome, r.reconcilerContext)
-		case tlsConfig.Secret.Name:
-			// If CaSecret.Name is same as Secret.Name, mount only Secret.Name as a directory
-			mountFolder("http", "certs", tlsConfig.Secret.Name, opensearchHome, r.reconcilerContext)
-		default:
-			// If CaSecret.Name is different from Secret.Name, mount both secrets as directories
-			// Mount Secret.Name as tls-http/
-			mountFolder("http", "certs", tlsConfig.Secret.Name, opensearchHome, r.reconcilerContext)
-			// Mount CaSecret.Name as tls-http-ca/
-			mountFolder("http", "ca", tlsConfig.CaSecret.Name, opensearchHome, r.reconcilerContext)
-		}
+		err := errors.New("missing secret in spec")
+		r.logger.Error(err, "Not all secrets for http provided")
+		//		r.recorder.Event(r.instance, "Warning", "Security", "Notice - Not all secrets for http provided")
+		return err
 	}
+
+	opensearchHome := r.instance.Spec.General.GetOpenSearchHome()
+	mountFolder("http", "cert", httpTlsSecret, opensearchHome, r.reconcilerContext)
+	mountFolder("http", "ca", r.trustedAdminCASecretName(), opensearchHome, r.reconcilerContext)
+
 	// Extend opensearch.yml with appropriate file paths based on mounting logic
 	r.reconcilerContext.AddConfig("plugins.security.ssl.http.enabled", "true")
-
-	// Set certificate file paths based on mounting configuration
-	// When generate is true, the CA cert is included in the generated secret mounted at tls-http/
-	// Only when generate is false AND CaSecret differs from Secret do we use the separate tls-http-ca/ mount
-	if tlsConfig.Generate || tlsConfig.CaSecret.Name == "" || tlsConfig.CaSecret.Name == tlsConfig.Secret.Name {
-		// Single secret mounted as directory
-		r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemcert_filepath", fmt.Sprintf("tls-http/%s", corev1.TLSCertKey))
-		r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemkey_filepath", fmt.Sprintf("tls-http/%s", corev1.TLSPrivateKeyKey))
-		r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemtrustedcas_filepath", fmt.Sprintf("tls-http/%s", CaCertKey))
-	} else {
-		// Separate secrets mounted as directories
-		r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemcert_filepath", fmt.Sprintf("tls-http/%s", corev1.TLSCertKey))
-		r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemkey_filepath", fmt.Sprintf("tls-http/%s", corev1.TLSPrivateKeyKey))
-		r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemtrustedcas_filepath", fmt.Sprintf("tls-http-ca/%s", CaCertKey))
-	}
+	r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemcert_filepath", fmt.Sprintf("tls-http/%s", corev1.TLSCertKey))
+	r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemkey_filepath", fmt.Sprintf("tls-http/%s", corev1.TLSPrivateKeyKey))
+	r.reconcilerContext.AddConfig("plugins.security.ssl.http.pemtrustedcas_filepath", fmt.Sprintf("tls-http-ca/%s", CaCertKey))
 
 	// Enable hot reload if configured and version supports it
 	if tlsConfig.EnableHotReload && helpers.SupportsHotReload(r.instance) {
 		r.reconcilerContext.AddConfig("plugins.security.ssl.certificates_hot_reload.enabled", "true")
 	}
+
 	return nil
 }
 
@@ -760,16 +758,19 @@ func (r *TLSReconciler) getReferencedCaCertOrDefault(
 }
 
 func mountFolder(interfaceName string, name string, secretName string, opensearchHome string, reconcilerContext *ReconcilerContext) {
-	volume := corev1.Volume{Name: interfaceName + "-" + name, VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secretName}}}
-	reconcilerContext.Volumes = append(reconcilerContext.Volumes, volume)
-
 	var mountPath string
+	secretVolumeSource := &corev1.SecretVolumeSource{SecretName: secretName}
 	if name == "ca" {
 		mountPath = fmt.Sprintf("%s/config/tls-%s-ca", opensearchHome, interfaceName)
+		secretVolumeSource.Items = []corev1.KeyToPath{
+			{Key: CaCertKey, Path: CaCertKey},
+		}
 	} else {
 		mountPath = fmt.Sprintf("%s/config/tls-%s", opensearchHome, interfaceName)
 	}
 
+	volume := corev1.Volume{Name: interfaceName + "-" + name, VolumeSource: corev1.VolumeSource{Secret: secretVolumeSource}}
+	reconcilerContext.Volumes = append(reconcilerContext.Volumes, volume)
 	mount := corev1.VolumeMount{Name: interfaceName + "-" + name, MountPath: mountPath}
 	reconcilerContext.VolumeMounts = append(reconcilerContext.VolumeMounts, mount)
 }

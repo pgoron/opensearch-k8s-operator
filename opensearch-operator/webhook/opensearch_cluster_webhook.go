@@ -21,7 +21,6 @@ import (
 	"fmt"
 
 	opensearchv1 "github.com/opensearch-project/opensearch-k8s-operator/opensearch-operator/api/opensearch.org/v1"
-	"github.com/opensearch-project/opensearch-k8s-operator/opensearch-operator/pkg/helpers"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -152,6 +151,9 @@ func (v *OpenSearchClusterValidator) validateTlsConfig(cluster *opensearchv1.Ope
 			return nil, fmt.Errorf("transport TLS is enabled but neither generate nor secret is provided")
 		}
 	}
+	if tlsConfig.Transport != nil && tlsConfig.Transport.Generate && tlsConfig.Transport.Secret.Name != "" {
+		return nil, fmt.Errorf("transport TLS secret must not be provided when generate is true")
+	}
 
 	// Validate HTTP TLS: if enabled=true, HTTP config must be provided
 	if tlsConfig.Http != nil && tlsConfig.Http.Enabled != nil && *tlsConfig.Http.Enabled {
@@ -161,26 +163,8 @@ func (v *OpenSearchClusterValidator) validateTlsConfig(cluster *opensearchv1.Ope
 			return nil, fmt.Errorf("HTTP TLS is enabled but neither generate nor secret is provided")
 		}
 	}
-
-	// Validate admin secret name: if AdminSecret is empty, tls generate should be true.
-	if helpers.IsSecurityPluginEnabled(cluster) {
-		if cluster.Spec.Security.Config != nil && cluster.Spec.Security.Config.AdminSecret.Name != "" {
-			return nil, nil
-		} else {
-			if helpers.SecurityChangeVersion(cluster) {
-				if tlsConfig.Http != nil && tlsConfig.Http.Generate {
-					return nil, nil
-				} else {
-					return nil, fmt.Errorf("admin secret name is not provided but http.tls generate is not true")
-				}
-			} else {
-				if tlsConfig.Transport != nil && tlsConfig.Transport.Generate {
-					return nil, nil
-				} else {
-					return nil, fmt.Errorf("admin secret name is not provided but transport.tls generate is not true")
-				}
-			}
-		}
+	if tlsConfig.Http != nil && tlsConfig.Http.Generate && tlsConfig.Http.Secret.Name != "" {
+		return nil, fmt.Errorf("HTTP TLS secret must not be provided when generate is true")
 	}
 
 	return nil, nil

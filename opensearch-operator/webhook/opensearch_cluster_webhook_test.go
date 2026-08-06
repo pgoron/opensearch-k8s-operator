@@ -168,6 +168,64 @@ var _ = Describe("OpenSearchClusterValidator", func() {
 			Expect(warnings).To(BeEmpty())
 		})
 
+		It("should reject transport TLS secret when generate is true", func() {
+			cluster := &opensearchv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+				},
+				Spec: opensearchv1.ClusterSpec{
+					General: opensearchv1.GeneralConfig{
+						Version: "2.19.4",
+					},
+					Security: &opensearchv1.Security{
+						Tls: &opensearchv1.TlsConfig{
+							Transport: &opensearchv1.TlsConfigTransport{
+								Generate: true,
+								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+									Secret: corev1.LocalObjectReference{Name: "external-transport-cert"},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			warnings, err := validator.ValidateCreate(ctx, cluster)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("transport TLS secret must not be provided when generate is true"))
+			Expect(warnings).To(BeEmpty())
+		})
+
+		It("should reject HTTP TLS secret when generate is true", func() {
+			cluster := &opensearchv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+				},
+				Spec: opensearchv1.ClusterSpec{
+					General: opensearchv1.GeneralConfig{
+						Version: "2.19.4",
+					},
+					Security: &opensearchv1.Security{
+						Tls: &opensearchv1.TlsConfig{
+							Http: &opensearchv1.TlsConfigHttp{
+								Generate: true,
+								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+									Secret: corev1.LocalObjectReference{Name: "external-http-cert"},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			warnings, err := validator.ValidateCreate(ctx, cluster)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("HTTP TLS secret must not be provided when generate is true"))
+			Expect(warnings).To(BeEmpty())
+		})
+
 		It("should allow transport TLS with generate enabled", func() {
 			enabled := true
 			cluster := &opensearchv1.OpenSearchCluster{
@@ -216,6 +274,67 @@ var _ = Describe("OpenSearchClusterValidator", func() {
 								},
 							},
 						},
+					},
+				},
+			}
+
+			warnings, err := validator.ValidateCreate(ctx, cluster)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(warnings).To(BeEmpty())
+		})
+
+		It("should allow usage of external HTTP TLS with operator-generated admin cert", func() {
+			cluster := &opensearchv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+				},
+				Spec: opensearchv1.ClusterSpec{
+					General: opensearchv1.GeneralConfig{
+						Version: "2.19.4",
+					},
+					Security: &opensearchv1.Security{
+						Tls: &opensearchv1.TlsConfig{
+							Transport: &opensearchv1.TlsConfigTransport{Generate: true},
+							Http: &opensearchv1.TlsConfigHttp{
+								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+									Secret: corev1.LocalObjectReference{Name: "external-http-cert"},
+								},
+							},
+						},
+					},
+					NodePools: []opensearchv1.NodePool{
+						{Component: "masters"},
+					},
+				},
+			}
+
+			warnings, err := validator.ValidateCreate(ctx, cluster)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(warnings).To(BeEmpty())
+		})
+
+		It("should allow usage of external transport TLS with operator-generated admin cert", func() {
+			cluster := &opensearchv1.OpenSearchCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+				},
+				Spec: opensearchv1.ClusterSpec{
+					General: opensearchv1.GeneralConfig{
+						Version: "1.3.19",
+					},
+					Security: &opensearchv1.Security{
+						Tls: &opensearchv1.TlsConfig{
+							Transport: &opensearchv1.TlsConfigTransport{
+								TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+									Secret: corev1.LocalObjectReference{Name: "external-transport-cert"},
+								},
+							},
+						},
+					},
+					NodePools: []opensearchv1.NodePool{
+						{Component: "masters"},
 					},
 				},
 			}

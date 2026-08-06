@@ -345,6 +345,51 @@ var _ = Describe("TlsCASecretRef", func() {
 	})
 })
 
+var _ = Describe("HTTPServerSecretRef", func() {
+	It("should return the external HTTP certificate secret", func() {
+		tlsConfig := &opensearchv1.TlsConfigHttp{
+			TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+				Secret:   corev1.LocalObjectReference{Name: "http-cert"},
+				CaSecret: corev1.LocalObjectReference{Name: "test-ca"},
+			},
+		}
+
+		Expect(HTTPServerSecretRef("test", tlsConfig).Name).To(Equal("http-cert"))
+	})
+
+	It("should return the generated HTTP certificate secret", func() {
+		tlsConfig := &opensearchv1.TlsConfigHttp{
+			Generate: true,
+			TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+				CaSecret: corev1.LocalObjectReference{Name: "test-ca"},
+			},
+		}
+
+		Expect(HTTPServerSecretRef("test", tlsConfig).Name).To(Equal("test-http-cert"))
+	})
+
+	It("should return empty when HTTP TLS is not configured", func() {
+		Expect(HTTPServerSecretRef("test", nil).Name).To(BeEmpty())
+	})
+})
+
+var _ = Describe("TransportServerCASecretRef", func() {
+	It("should return the transport caSecret", func() {
+		tlsConfig := &opensearchv1.TlsConfigTransport{
+			TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+				Secret:   corev1.LocalObjectReference{Name: "transport-cert"},
+				CaSecret: corev1.LocalObjectReference{Name: "transport-ca"},
+			},
+		}
+
+		Expect(TransportServerCASecretRef(tlsConfig).Name).To(Equal("transport-ca"))
+	})
+
+	It("should return empty when transport TLS is not configured", func() {
+		Expect(TransportServerCASecretRef(nil).Name).To(BeEmpty())
+	})
+})
+
 var _ = Describe("applyUserHashes", func() {
 	It("should preserve custom users alongside admin and kibanaserver", func() {
 		inputYaml := `

@@ -120,8 +120,9 @@ func SecurityChangeVersion(cluster *opensearchv1.OpenSearchCluster) bool {
 	)
 }
 
-// TlsCASecretRef returns the CA secret reference for admin and security operations.
-// OpenSearch 2.x uses the HTTP CA; earlier versions use the transport CA.
+// TlsCASecretRef returns the explicitly configured CA secret reference used to
+// generate the admin certificate. OpenSearch 2.x uses the HTTP CA; earlier
+// versions use the transport CA.
 func TlsCASecretRef(cluster *opensearchv1.OpenSearchCluster) corev1.LocalObjectReference {
 	if cluster == nil || cluster.Spec.Security == nil || cluster.Spec.Security.Tls == nil {
 		return corev1.LocalObjectReference{}
@@ -136,6 +137,23 @@ func TlsCASecretRef(cluster *opensearchv1.OpenSearchCluster) corev1.LocalObjectR
 		return cluster.Spec.Security.Tls.Transport.CaSecret
 	}
 	return corev1.LocalObjectReference{}
+}
+
+func HTTPServerSecretRef(clusterName string, tlsConfig *opensearchv1.TlsConfigHttp) corev1.LocalObjectReference {
+	if tlsConfig == nil {
+		return corev1.LocalObjectReference{}
+	}
+	if tlsConfig.Generate {
+		return corev1.LocalObjectReference{Name: fmt.Sprintf("%s-http-cert", clusterName)}
+	}
+	return tlsConfig.Secret
+}
+
+func TransportServerCASecretRef(tlsConfig *opensearchv1.TlsConfigTransport) corev1.LocalObjectReference {
+	if tlsConfig == nil {
+		return corev1.LocalObjectReference{}
+	}
+	return tlsConfig.CaSecret
 }
 
 func SupportsHotReload(cluster *opensearchv1.OpenSearchCluster) bool {
