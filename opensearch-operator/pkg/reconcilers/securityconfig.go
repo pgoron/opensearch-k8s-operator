@@ -305,7 +305,7 @@ func (r *SecurityconfigReconciler) determineAdminSecret() string {
 }
 
 func (r *SecurityconfigReconciler) determineAdminCASecret(adminSecretName string) string {
-	caSecretName := helpers.TlsCASecretRef(r.instance).Name
+	caSecretName := helpers.SecurityadminCASecretRef(r.instance).Name
 	// If CA comes from the same secret, keep single-secret mounting behavior.
 	if caSecretName == "" || caSecretName == adminSecretName {
 		return ""

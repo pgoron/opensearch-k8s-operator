@@ -343,3 +343,63 @@ var _ = Describe("TlsCASecretRef", func() {
 		Expect(TlsCASecretRef(cluster).Name).To(BeEmpty())
 	})
 })
+
+var _ = Describe("SecurityadminCASecretRef", func() {
+	It("should return the external HTTP certificate secret for OpenSearch 2.x", func() {
+		cluster := &opensearchv1.OpenSearchCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			Spec: opensearchv1.ClusterSpec{
+				General: opensearchv1.GeneralConfig{Version: "2.3.0"},
+				Security: &opensearchv1.Security{Tls: &opensearchv1.TlsConfig{Http: &opensearchv1.TlsConfigHttp{
+					TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+						Secret:   corev1.LocalObjectReference{Name: "http-cert"},
+						CaSecret: corev1.LocalObjectReference{Name: "test-ca"},
+					},
+				}}},
+			},
+		}
+
+		Expect(SecurityadminCASecretRef(cluster).Name).To(Equal("http-cert"))
+	})
+
+	It("should return the generated HTTP certificate secret for OpenSearch 2.x", func() {
+		cluster := &opensearchv1.OpenSearchCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			Spec: opensearchv1.ClusterSpec{
+				General: opensearchv1.GeneralConfig{Version: "2.3.0"},
+				Security: &opensearchv1.Security{Tls: &opensearchv1.TlsConfig{Http: &opensearchv1.TlsConfigHttp{
+					Generate: true,
+					TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+						CaSecret: corev1.LocalObjectReference{Name: "test-ca"},
+					},
+				}}},
+			},
+		}
+
+		Expect(SecurityadminCASecretRef(cluster).Name).To(Equal("test-http-cert"))
+	})
+
+	It("should retain the transport caSecret for OpenSearch 1.x", func() {
+		cluster := &opensearchv1.OpenSearchCluster{
+			Spec: opensearchv1.ClusterSpec{
+				General: opensearchv1.GeneralConfig{Version: "1.3.0"},
+				Security: &opensearchv1.Security{Tls: &opensearchv1.TlsConfig{Transport: &opensearchv1.TlsConfigTransport{
+					TlsCertificateConfig: opensearchv1.TlsCertificateConfig{
+						Secret:   corev1.LocalObjectReference{Name: "transport-cert"},
+						CaSecret: corev1.LocalObjectReference{Name: "transport-ca"},
+					},
+				}}},
+			},
+		}
+
+		Expect(SecurityadminCASecretRef(cluster).Name).To(Equal("transport-ca"))
+	})
+
+	It("should return empty when TLS is not configured", func() {
+		cluster := &opensearchv1.OpenSearchCluster{
+			Spec: opensearchv1.ClusterSpec{General: opensearchv1.GeneralConfig{Version: "2.3.0"}},
+		}
+
+		Expect(SecurityadminCASecretRef(cluster).Name).To(BeEmpty())
+	})
+})
